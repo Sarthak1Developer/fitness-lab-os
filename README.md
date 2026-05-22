@@ -38,3 +38,5 @@ npm run preview
 ## License
 
 MIT — see the LICENSE file.
+
+**Made with ❤️ by [Sarthak Maheshwari](https://github.com/Sarthak1Developer)**
