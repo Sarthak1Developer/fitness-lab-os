@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -254,8 +254,6 @@ const exerciseCategories = {
     "Band Mobility",
   ],
 };
-
-const exerciseLibrary = Object.values(exerciseCategories).flat();
 
 const normativeBands = [
   {
