@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -23,39 +23,9 @@ import {
 import { Card, CardContent } from "./components/ui/card";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
-
-const initialMembers = [
-  {
-    id: 1,
-    name: "Aarav Sharma",
-    age: 31,
-    gender: "male",
-    goal: "Athletic Performance",
-    trainingAge: "some",
-    fms: 2,
-    pain: 2,
-    cardio: "moderate",
-    readinessTrend: "stable",
-    phase: "FITNESS",
-    status: "Active",
-    renewal: "2026-06-15",
-  },
-  {
-    id: 2,
-    name: "Mansi Kapoor",
-    age: 29,
-    gender: "female",
-    goal: "Fat Loss",
-    trainingAge: "beginner",
-    fms: 1,
-    pain: 4,
-    cardio: "low",
-    readinessTrend: "declining",
-    phase: "BASE",
-    status: "Active",
-    renewal: "2026-06-01",
-  },
-];
+import AuthGate from "./components/auth/AuthGate";
+import { supabase } from "./lib/supabaseClient";
+import { generateMemberCode, normalizeFullName, normalizePhoneE164 } from "./lib/memberCode";
 
 const exerciseCategories = {
   "Lower Body — Squat Pattern": [
@@ -530,17 +500,269 @@ function SaveButton({ children = "Save", className = "" }) {
 }
 
 export default function FitnessLabOS() {
-  const [role, setRole] = useState("coach");
+  const [session, setSession] = useState(null);
+  const [sessionLoading, setSessionLoading] = useState(() => Boolean(supabase));
+  const [dbError, setDbError] = useState("");
+  const [authGateError, setAuthGateError] = useState("");
+  const [memberVerified, setMemberVerified] = useState(false);
+  const [memberVerifying, setMemberVerifying] = useState(false);
   const [tab, setTab] = useState("home");
-  const [members, setMembers] = useState(initialMembers);
-  const [selectedMemberId, setSelectedMemberId] = useState(1);
+  const [members, setMembers] = useState([]);
+  const [selectedMemberId, setSelectedMemberId] = useState("");
   const [search, setSearch] = useState("");
 
+  const role = session?.user?.email ? "coach" : "member";
+
+  const emptyMember = useMemo(
+    () => ({
+      id: "",
+      name: "No members yet",
+      age: "",
+      gender: "",
+      goal: "",
+      readinessTrend: "",
+      phase: "UNCLASSIFIED",
+      status: "",
+      renewal: "",
+      fms: "Not assessed",
+      pain: "Not assessed",
+      cardio: "Not assessed",
+      trainingAge: "Not assessed",
+      vo2Estimate: "Not assessed",
+      movementQuality: "Not assessed",
+      trainingHistory: "Not assessed",
+    }),
+    [],
+  );
+
+  function mapMemberRow(row) {
+    return {
+      id: row.id,
+      memberCode: row.member_code,
+      phone: row.phone,
+      name: row.full_name,
+      gender: row.gender || "male",
+      dob: row.dob || "",
+      age: row.age ?? "",
+      goal: row.goal || "Fat Loss",
+      readinessTrend: row.readiness_trend || "stable",
+      phase: row.phase || "UNCLASSIFIED",
+      status: row.status || "Active",
+      renewal: row.renewal || "",
+      fms: "Not assessed",
+      pain: "Not assessed",
+      cardio: "Not assessed",
+      cardioCapacity: "Not assessed",
+      vo2Estimate: "Not assessed",
+      movementQuality: "Not assessed",
+      trainingHistory: "Not assessed",
+      trainingAge: "Not assessed",
+    };
+  }
+
+  function formatDbSetupError(err) {
+    const msg = err?.message || String(err || "");
+    if (msg.includes("Could not find the table 'public.members'")) {
+      return "Supabase DB not initialized: run supabase/schema.sql in Supabase SQL Editor, then go to Settings → API → Reload schema cache.";
+    }
+    return msg || "Database error";
+  }
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    let isMounted = true;
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!isMounted) return;
+        setSession(data.session);
+        setSessionLoading(false);
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setSessionLoading(false);
+      });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+    });
+
+    return () => {
+      isMounted = false;
+      data?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    if (!session) {
+      queueMicrotask(() => {
+        setMemberVerified(false);
+        setMemberVerifying(false);
+      });
+      return;
+    }
+
+    if (role === "coach") {
+      queueMicrotask(() => {
+        setMemberVerified(true);
+        setMemberVerifying(false);
+      });
+      return;
+    }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      setMemberVerified(false);
+      setMemberVerifying(true);
+    });
+
+    async function verifyMember() {
+      try {
+        await supabase.auth.refreshSession();
+        const current = (await supabase.auth.getSession()).data.session;
+        const code = current?.user?.user_metadata?.member_code;
+        const fullName = current?.user?.user_metadata?.full_name;
+
+        if (!code || !fullName) {
+          throw new Error("Missing member credentials. Please login again.");
+        }
+
+        const normalizedCode = String(code).trim().toUpperCase();
+        const normalizedName = normalizeFullName(fullName);
+
+        const { data, error } = await supabase
+          .from("members")
+          .select("id, full_name")
+          .eq("member_code", normalizedCode)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!data) throw new Error("Invalid member name or member id");
+
+        // Extra guard (in case RLS policy is relaxed): require name match after normalization.
+        if (normalizeFullName(data.full_name).toLowerCase() !== normalizedName.toLowerCase()) {
+          throw new Error("Invalid member name or member id");
+        }
+
+        if (cancelled) return;
+        setMemberVerified(true);
+        setMemberVerifying(false);
+      } catch (e) {
+        if (cancelled) return;
+        setMemberVerified(false);
+        setMemberVerifying(false);
+        setAuthGateError(formatDbSetupError(e));
+        await supabase.auth.signOut();
+      }
+    }
+
+    verifyMember();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [role, session?.user?.id]);
+
+  useEffect(() => {
+    if (!supabase || !session?.user?.id) return;
+    if (role === "member" && !memberVerified) return;
+
+    let cancelled = false;
+
+    async function loadMembers() {
+      setDbError("");
+      if (role === "coach") {
+        const { data, error } = await supabase
+          .from("members")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if (cancelled) return;
+        if (error) {
+          console.error(error);
+          setDbError(formatDbSetupError(error));
+          return;
+        }
+        const mapped = (data || []).map(mapMemberRow);
+        setMembers(mapped);
+        setSelectedMemberId((prev) => prev || (mapped[0] ? String(mapped[0].id) : ""));
+      } else {
+        const memberCode = session?.user?.user_metadata?.member_code;
+        const { data, error } = await supabase
+          .from("members")
+          .select("*")
+          .eq("member_code", memberCode || "")
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) {
+          console.error(error);
+          setDbError(formatDbSetupError(error));
+          return;
+        }
+        const mapped = data ? [mapMemberRow(data)] : [];
+        setMembers(mapped);
+        setSelectedMemberId(mapped[0] ? String(mapped[0].id) : "");
+      }
+    }
+
+    loadMembers();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [memberVerified, role, session?.user?.id]);
+
+  if (sessionLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-6 text-slate-950">
+        <div className="mx-auto max-w-xl">
+          <Card className="rounded-3xl border-slate-200 shadow-sm">
+            <CardContent className="p-6">
+              <p className="text-sm font-semibold text-slate-600">Loading session…</p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <AuthGate
+        onSession={setSession}
+        initialError={authGateError}
+        onClearInitialError={() => setAuthGateError("")}
+      />
+    );
+  }
+
+  if (role === "member" && (memberVerifying || !memberVerified)) {
+    return (
+      <div className="min-h-screen bg-slate-50 p-6 text-slate-950">
+        <div className="mx-auto max-w-xl">
+          <Card className="rounded-3xl border-slate-200 shadow-sm">
+            <CardContent className="p-6">
+              <p className="text-sm font-semibold text-slate-600">Verifying member…</p>
+              <p className="mt-2 text-xs text-slate-500">
+                If this takes more than a few seconds, your member name / member ID may be incorrect.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   const selectedMember =
-    members.find((m) => m.id === selectedMemberId) || members[0];
+    members.find((m) => String(m.id) === String(selectedMemberId)) ||
+    members[0] ||
+    emptyMember;
 
   const filteredMembers = members.filter((m) =>
-    m.name.toLowerCase().includes(search.toLowerCase()),
+    String(m.name || "").toLowerCase().includes(search.toLowerCase()),
   );
 
   const totalMembers = members.length;
@@ -583,25 +805,25 @@ export default function FitnessLabOS() {
             </p>
           </div>
 
-          <div className="mb-4 grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1">
-            <button
-              onClick={() => {
-                setRole("member");
+          <div className="mb-4 rounded-2xl bg-slate-100 p-4">
+            <p className="text-xs font-bold uppercase text-slate-400">Signed in</p>
+            <p className="mt-1 text-sm font-black text-slate-950">
+              {role === "coach"
+                ? session?.user?.email || "Coach"
+                : session?.user?.phone || "Member"}
+            </p>
+            <p className="mt-1 text-xs font-semibold text-slate-500 capitalize">
+              Role: {role}
+            </p>
+            <Button
+              onClick={async () => {
+                await supabase.auth.signOut();
                 setTab("home");
               }}
-              className={`rounded-xl px-3 py-2 text-xs font-bold ${role === "member" ? "bg-white shadow-sm" : "text-slate-500"}`}
+              className="mt-3 w-full bg-slate-200 text-slate-900 hover:bg-slate-300"
             >
-              Member
-            </button>
-            <button
-              onClick={() => {
-                setRole("coach");
-                setTab("home");
-              }}
-              className={`rounded-xl px-3 py-2 text-xs font-bold ${role === "coach" ? "bg-white shadow-sm" : "text-slate-500"}`}
-            >
-              Coach
-            </button>
+              Logout
+            </Button>
           </div>
 
           <nav className="space-y-1">
@@ -619,25 +841,25 @@ export default function FitnessLabOS() {
 
         <main className="flex-1">
           <div className="mb-4 rounded-3xl border border-slate-200 bg-white p-3 shadow-sm lg:hidden">
-            <div className="mb-3 grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1">
-              <button
-                onClick={() => {
-                  setRole("member");
+            <div className="mb-3 flex items-center justify-between rounded-2xl bg-slate-100 p-3">
+              <div>
+                <p className="text-xs font-bold uppercase text-slate-400">Signed in</p>
+                <p className="mt-0.5 text-sm font-black text-slate-950">
+                  {role === "coach"
+                    ? session?.user?.email || "Coach"
+                    : session?.user?.phone || "Member"}
+                </p>
+                <p className="text-xs font-semibold text-slate-500 capitalize">Role: {role}</p>
+              </div>
+              <Button
+                onClick={async () => {
+                  await supabase.auth.signOut();
                   setTab("home");
                 }}
-                className={`rounded-xl px-3 py-2 text-xs font-bold ${role === "member" ? "bg-white shadow-sm" : "text-slate-500"}`}
+                className="bg-slate-200 text-slate-900 hover:bg-slate-300"
               >
-                Member Side
-              </button>
-              <button
-                onClick={() => {
-                  setRole("coach");
-                  setTab("home");
-                }}
-                className={`rounded-xl px-3 py-2 text-xs font-bold ${role === "coach" ? "bg-white shadow-sm" : "text-slate-500"}`}
-              >
-                Coach / Admin
-              </button>
+                Logout
+              </Button>
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
               {nav.map(([id, Icon, label]) => (
@@ -653,6 +875,11 @@ export default function FitnessLabOS() {
           </div>
 
           <div className="mb-5 rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
+            {dbError && (
+              <div className="mb-3 rounded-2xl bg-red-50 p-4 text-sm text-red-700">
+                {dbError}
+              </div>
+            )}
             <div className="mb-3 hidden gap-2 overflow-x-auto pb-1 lg:flex">
               {nav.map(([id, Icon, label]) => (
                 <button
@@ -685,7 +912,7 @@ export default function FitnessLabOS() {
                 </Badge>
                 <Select
                   value={selectedMemberId}
-                  onChange={(v) => setSelectedMemberId(Number(v))}
+                  onChange={(v) => setSelectedMemberId(v)}
                 >
                   {members.map((m) => (
                     <option key={m.id} value={m.id}>
@@ -719,6 +946,7 @@ export default function FitnessLabOS() {
                 search={search}
                 setSearch={setSearch}
                 setSelectedMemberId={setSelectedMemberId}
+                session={session}
               />
             )}
             {tab === "profile" && <MemberProfile selectedMember={selectedMember} />}
@@ -962,9 +1190,17 @@ function AlertCard({ title, text }) {
   );
 }
 
-function Members({ members, setMembers, search, setSearch, setSelectedMemberId }) {
+function Members({
+  members,
+  setMembers,
+  search,
+  setSearch,
+  setSelectedMemberId,
+  session,
+}) {
   const [form, setForm] = useState({
     name: "",
+    phone: "",
     gender: "male",
     dob: "",
     age: "",
@@ -972,33 +1208,104 @@ function Members({ members, setMembers, search, setSearch, setSelectedMemberId }
     readinessTrend: "stable",
   });
 
-  function addMember() {
-    if (!form.name.trim()) return;
-    const calculatedAge = calculateAgeFromDOB(form.dob);
-    const newMember = {
-      id: Date.now(),
-      ...form,
-      age: Number(calculatedAge || form.age || 0),
-      fms: "Not assessed",
-      pain: "Not assessed",
-      cardioCapacity: "Not assessed",
-      vo2Estimate: "Not assessed",
-      movementQuality: "Not assessed",
-      trainingHistory: "Not assessed",
-      phase: "UNCLASSIFIED",
-      status: "Active",
-      renewal: "2026-07-01",
-    };
-    setMembers((prev) => [newMember, ...prev]);
-    setSelectedMemberId(newMember.id);
-    setForm({
-      name: "",
-      gender: "male",
-      dob: "",
-      age: "",
-      goal: "Fat Loss",
-      readinessTrend: "stable",
-    });
+  const [creating, setCreating] = useState(false);
+  const [createdMember, setCreatedMember] = useState(null);
+  const [createError, setCreateError] = useState("");
+
+  async function addMember() {
+    setCreateError("");
+    setCreatedMember(null);
+
+    if (!supabase || !session?.user?.id) {
+      setCreateError("Not signed in, or Supabase not configured");
+      return;
+    }
+
+    if (!form.name.trim()) {
+      setCreateError("Enter full name");
+      return;
+    }
+
+    const phone = normalizePhoneE164(form.phone);
+    if (!phone) {
+      setCreateError("Enter phone in E.164 format (e.g. +919876543210)");
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const calculatedAge = calculateAgeFromDOB(form.dob);
+      const memberCode = generateMemberCode();
+
+      const payload = {
+        coach_id: session.user.id,
+        member_code: memberCode,
+        full_name: normalizeFullName(form.name),
+        phone,
+        gender: form.gender,
+        dob: form.dob || null,
+        age: Number(calculatedAge || form.age || 0) || null,
+        goal: form.goal,
+        readiness_trend: form.readinessTrend,
+        phase: "UNCLASSIFIED",
+        status: "Active",
+        renewal: "2026-07-01",
+      };
+
+      const { data, error } = await supabase
+        .from("members")
+        .insert(payload)
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      const uiMember = {
+        id: data.id,
+        memberCode: data.member_code,
+        phone: data.phone,
+        name: data.full_name,
+        gender: data.gender || "male",
+        dob: data.dob || "",
+        age: data.age ?? "",
+        goal: data.goal || "Fat Loss",
+        readinessTrend: data.readiness_trend || "stable",
+        fms: "Not assessed",
+        pain: "Not assessed",
+        cardioCapacity: "Not assessed",
+        vo2Estimate: "Not assessed",
+        movementQuality: "Not assessed",
+        trainingHistory: "Not assessed",
+        phase: data.phase || "UNCLASSIFIED",
+        status: data.status || "Active",
+        renewal: data.renewal || "",
+      };
+
+      setMembers((prev) => [uiMember, ...prev]);
+      setSelectedMemberId(String(uiMember.id));
+      setCreatedMember({ memberCode, phone });
+
+      setForm({
+        name: "",
+        phone: "",
+        gender: "male",
+        dob: "",
+        age: "",
+        goal: "Fat Loss",
+        readinessTrend: "stable",
+      });
+    } catch (e) {
+      const msg = e?.message || "Failed to create member";
+      if (msg.includes("Could not find the table 'public.members'")) {
+        setCreateError(
+          "Supabase DB not initialized: run supabase/schema.sql in Supabase SQL Editor, then go to Settings → API → Reload schema cache.",
+        );
+      } else {
+        setCreateError(msg);
+      }
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -1016,6 +1323,11 @@ function Members({ members, setMembers, search, setSearch, setSelectedMemberId }
               placeholder="Full name"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+            <Input
+              placeholder="Phone (e.g. +919876543210)"
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
             />
             <div>
               <p className="mb-1 text-xs font-bold uppercase text-slate-400">Gender</p>
@@ -1059,11 +1371,33 @@ function Members({ members, setMembers, search, setSearch, setSelectedMemberId }
               </Select>
             </div>
             <div className="flex gap-2">
-              <Button onClick={addMember} className="flex-1 rounded-2xl bg-slate-950">
-                <Plus size={16} className="mr-2" /> Add Member
+              <Button
+                onClick={addMember}
+                disabled={creating}
+                className="flex-1 rounded-2xl bg-slate-950"
+              >
+                <Plus size={16} className="mr-2" />
+                {creating ? "Creating…" : "Create Member"}
               </Button>
-              <SaveButton className="flex-1">Save Member</SaveButton>
             </div>
+
+            {createError && (
+              <div className="rounded-2xl bg-red-50 p-3 text-sm text-red-700">
+                {createError}
+              </div>
+            )}
+
+            {createdMember && (
+              <div className="rounded-2xl bg-emerald-50 p-3 text-sm text-emerald-800">
+                <p className="font-bold">Member created</p>
+                <p className="mt-1">
+                  Member ID: <span className="font-black">{createdMember.memberCode}</span>
+                </p>
+                <p className="text-xs text-emerald-900/70">
+                  Member logs in with this ID + {createdMember.phone}.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -1089,6 +1423,11 @@ function Members({ members, setMembers, search, setSearch, setSelectedMemberId }
                     <div>
                       <p className="font-black">{m.name}</p>
                       <p className="text-sm text-slate-500">{m.goal}</p>
+                      {m.memberCode && (
+                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                          Member ID: <span className="font-black text-slate-700">{m.memberCode}</span>
+                        </p>
+                      )}
                     </div>
                     <Badge
                       tone={
