@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -264,6 +264,106 @@ const normativeBands = [
   },
 ];
 
+const parqQuestions = [
+  "Has a doctor ever diagnosed you with a heart condition, high blood pressure, diabetes, asthma, or any other medical condition that may affect exercise?",
+  "Do you experience chest pain, dizziness, fainting, or unusual shortness of breath during exercise or daily activity?",
+  "Are you currently taking any prescribed medication for blood pressure, heart health, diabetes, thyroid, mental health, or any chronic condition?",
+  "Do you currently have any pain, injury, surgery, or orthopedic issue involving your muscles, joints, spine, or ligaments that may worsen with exercise?",
+  "Have you undergone surgery, hospitalization, or major medical treatment within the last 12 months?",
+  "Has any doctor or healthcare professional ever advised you to avoid or modify exercise?",
+  "Do you smoke, vape, chew tobacco, or consume alcohol frequently?",
+  "Do you currently perform at least 150 minutes of physical activity/exercise per week?",
+  "Do you regularly experience poor sleep, excessive stress, fatigue, or difficulty recovering from training?",
+  "Are you currently pregnant, postpartum (<12 months), or managing a condition such as PCOS, anemia, or hormonal imbalance? (if applicable)",
+];
+
+const exerciseHistoryQuestions = [
+  {
+    label: "Frequency — days/week",
+    key: "frequency",
+    options: ["0 days/week", "1–2 days/week", "3–4 days/week", "5–6 days/week", "Daily"],
+  },
+  {
+    label: "Intensity",
+    key: "intensity",
+    options: [
+      "Light — easy effort / can talk comfortably",
+      "Moderate — noticeable effort / breathing faster",
+      "Vigorous — hard effort / short phrases only",
+      "Mixed intensity — varies by session",
+      "Not sure",
+    ],
+  },
+  {
+    label: "Time — average session duration",
+    key: "time",
+    options: ["<30 minutes", "30–45 minutes", "45–60 minutes", "60–90 minutes", ">90 minutes"],
+  },
+  {
+    label: "Type",
+    key: "type",
+    options: [
+      "Resistance training",
+      "Cardio / endurance",
+      "Sport",
+      "Yoga / mobility",
+      "Hybrid / mixed",
+      "No current training",
+    ],
+  },
+  {
+    label: "Previous coaching / structured training exposure",
+    key: "coachingExposure",
+    options: [
+      "None",
+      "Basic gym exposure",
+      "Worked with trainer",
+      "Structured S&C program",
+      "Competitive sport program",
+    ],
+  },
+  {
+    label: "Current weekly training schedule",
+    key: "weeklySchedule",
+    options: [
+      "Irregular",
+      "1–2 sessions/week",
+      "3–4 sessions/week",
+      "5+ sessions/week",
+      "Sport-specific schedule",
+    ],
+  },
+  {
+    label: "Resistance training experience",
+    key: "resistanceExperience",
+    options: ["None", "Beginner", "Intermediate", "Advanced", "Competitive lifting / athlete"],
+  },
+  {
+    label: "Cardio / endurance training experience",
+    key: "cardioExperience",
+    options: [
+      "None",
+      "Beginner",
+      "Can sustain 20 minutes",
+      "Regular endurance training",
+      "Competitive endurance / hybrid athlete",
+    ],
+  },
+];
+
+const lifestyleQuestions = [
+  { label: "Smoking status", key: "smoking", options: ["No", "Occasional", "Regular", "Former smoker"] },
+  { label: "Alcohol consumption", key: "alcohol", options: ["No", "Occasional", "Weekly", "Frequent"] },
+  { label: "Sleep schedule", key: "sleepSchedule", options: ["Regular 7–9 hours", "Irregular", "Less than 6 hours", "Shift work"] },
+  { label: "Stress levels", key: "stress", options: ["Low", "Moderate", "High", "Very high"] },
+  { label: "Occupation activity level", key: "occupationActivity", options: ["Sedentary desk work", "Lightly active", "Physically active", "Highly demanding"] },
+  { label: "Previous injury history", key: "injuryHistory", options: ["No major injury", "Previous injury fully recovered", "Recurring issue", "Current active issue"] },
+  { label: "Surgery history", key: "surgeryHistory", options: ["No", "Yes — more than 12 months ago", "Yes — within last 12 months"] },
+  { label: "Current medications", key: "medications", options: ["No", "Yes — BP/heart", "Yes — diabetes/thyroid", "Yes — mental health", "Yes — other"] },
+  { label: "Family history of cardiovascular disease", key: "familyCVD", options: ["No", "Yes", "Not sure"] },
+  { label: "Diabetes / metabolic conditions", key: "metabolic", options: ["No", "Diabetes", "PCOS", "Thyroid", "Other / not sure"] },
+];
+
 const goalOptions = [
   "Fat Loss",
   "Muscle Gain / Hypertrophy",
@@ -288,6 +388,21 @@ function calculateAgeFromDOB(dob) {
   return age >= 0 ? age : "";
 }
 
+function calculateJacksonPollock3Site({ gender, age, chest, abdomen, thigh, triceps, suprailiac }) {
+  const a = Number(age || 30);
+  const sum =
+    gender === "male"
+      ? Number(chest || 0) + Number(abdomen || 0) + Number(thigh || 0)
+      : Number(triceps || 0) + Number(suprailiac || 0) + Number(thigh || 0);
+  if (!sum) return "—";
+  const density =
+    gender === "male"
+      ? 1.10938 - 0.0008267 * sum + 0.0000016 * sum * sum - 0.0002574 * a
+      : 1.0994921 - 0.0009929 * sum + 0.0000023 * sum * sum - 0.0001392 * a;
+  const bodyFat = 495 / density - 450;
+  return Number.isFinite(bodyFat) ? bodyFat.toFixed(1) : "—";
+}
+
 function getCardioCategoryFromVO2(vo2) {
   const value = Number(vo2 || 0);
   if (!value) return "not_tested";
@@ -300,31 +415,47 @@ function classifyMember({
   fmsTotal,
   pain,
   vo2Estimate,
-  movementQuality,
   trainingHistory,
+  postureDeviationScore = 0,
+  cardioMinutes = 0,
+  postureStatus = "moderate",
 }) {
   const fmsNum = Number(fmsTotal || 0);
   const painNum = Number(pain || 0);
   const cardioCategory = getCardioCategoryFromVO2(vo2Estimate);
+  const cardioDuration = Number(cardioMinutes || 0);
+  const adjustedFMS = Math.max(0, fmsNum - Number(postureDeviationScore || 0));
+  const movementBand = getMovementCompetency({ fmsTotal: adjustedFMS, pain: painNum });
 
-  const baseFlags = [
-    fmsNum <= 14,
-    painNum >= 4,
-    cardioCategory === "low_cardio",
-    movementQuality === "poor",
-  ].filter(Boolean).length;
+  const isBase =
+    adjustedFMS <= 14 ||
+    painNum >= 4 ||
+    cardioCategory === "low_cardio" ||
+    cardioDuration < 20 ||
+    movementBand === "limited" ||
+    postureStatus === "poor" ||
+    trainingHistory === "sedentary";
 
-  const performanceFlags = [
-    fmsNum >= 17,
-    painNum <= 1,
-    cardioCategory === "high_cardio",
-    movementQuality === "advanced",
-    trainingHistory === "structured_training",
-  ].filter(Boolean).length;
+  const isPerformance =
+    adjustedFMS >= 17 &&
+    painNum <= 1 &&
+    cardioCategory === "high_cardio" &&
+    cardioDuration >= 20 &&
+    movementBand === "advanced" &&
+    postureStatus === "good" &&
+    trainingHistory === "structured_training";
 
-  if (baseFlags >= 2) return "BASE";
-  if (performanceFlags >= 4) return "PERFORMANCE";
+  if (isBase) return "BASE";
+  if (isPerformance) return "PERFORMANCE";
   return "FITNESS";
+}
+
+function getMovementCompetency({ fmsTotal, pain }) {
+  const fms = Number(fmsTotal || 0);
+  const painScore = Number(pain || 0);
+  if (painScore >= 4 || fms <= 10) return "limited";
+  if (fms <= 15) return "moderate";
+  return "advanced";
 }
 
 function getSleepSubscore(hours, quality) {
@@ -469,11 +600,12 @@ function MetricCard({ label, value, icon: Icon }) {
   );
 }
 
-function Select({ value, onChange, children }) {
+function Select({ value, onChange, children, ...props }) {
   return (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
+      {...props}
       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-900"
     >
       {children}
@@ -481,22 +613,114 @@ function Select({ value, onChange, children }) {
   );
 }
 
-function SaveButton({ children = "Save", className = "" }) {
+function SaveButton({ children = "Save", className = "", onSave }) {
   const [saved, setSaved] = useState(false);
-  function handleSave() {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1800);
+  const [saving, setSaving] = useState(false);
+  async function handleSave() {
+    if (!onSave) {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSaving(false);
+    }
   }
   return (
-    <Button onClick={handleSave} className={`rounded-2xl bg-slate-950 ${className}`}>
+    <Button
+      onClick={handleSave}
+      disabled={saving}
+      className={`rounded-2xl bg-slate-950 ${className}`}
+    >
       {saved ? (
         <CheckCircle2 size={16} className="mr-2" />
       ) : (
         <Save size={16} className="mr-2" />
       )}
-      {saved ? "Saved" : children}
+      {saved ? "Saved" : saving ? "Saving…" : children}
     </Button>
   );
+}
+
+async function downloadPlanFile(member, plan) {
+  if (supabase && plan?.storagePath && plan?.fileName) {
+    const { data, error } = await supabase.storage
+      .from("member-plans")
+      .createSignedUrl(plan.storagePath, 60 * 10);
+    if (error) throw error;
+    const a = document.createElement("a");
+    a.href = data.signedUrl;
+    a.download = plan.fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    return;
+  }
+
+  const content = `The Fitness Function — Training Plan
+
+Member: ${member?.name || "—"}
+Goal: ${member?.goal || "—"}
+Plan: ${plan?.name || "No active plan uploaded"}
+Type: ${plan?.type || "PDF / Excel"}
+Status: ${plan?.status || "Pending coach upload"}`;
+  const blob = new Blob([content], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${member?.name || "member"}-training-plan.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function mapMemberRow(row) {
+  return {
+    id: row.id,
+    memberCode: row.member_code,
+    phone: row.phone,
+    name: row.full_name,
+    gender: row.gender || "male",
+    dob: row.dob || "",
+    age: row.age ?? "",
+    goal: row.goal || "Fat Loss",
+    nutritionIntervention: row.nutrition_intervention || "No",
+    readinessTrend: row.readiness_trend || "stable",
+    healthCategory: row.health_category || "HEALTHY",
+    phase: row.phase || "UNCLASSIFIED",
+    status: row.status || "Active",
+    renewal: row.renewal || "",
+    fms: row.fms_total ?? "Not assessed",
+    pain: row.pain_nprs ?? "Not assessed",
+    cardio: "Not assessed",
+    cardioCapacity: "Not assessed",
+    vo2Estimate: row.vo2_estimate ?? "Not assessed",
+    movementQuality: row.movement_quality ?? "Not assessed",
+    trainingHistory: row.training_history ?? "Not assessed",
+    trainingAge: "Not assessed",
+    parqAnswers: row.parq_answers || {},
+    lifestyleAnswers: row.lifestyle_answers || {},
+    exerciseHistoryAnswers: row.exercise_history_answers || {},
+    latestReadiness: row.latest_readiness || null,
+    assessmentLab: row.assessment_lab || {},
+    plans: row.plans || [],
+    currentPlanId: row.current_plan_id || "",
+    address: row.address || "",
+    email: row.email || "",
+    emergencyContactName: row.emergency_contact_name || "",
+    emergencyContactNumber: row.emergency_contact_number || "",
+    govtIdType: row.govt_id_type || "",
+    govtIdNumber: row.govt_id_number || "",
+    govtIdFile: row.govt_id_file || "",
+  };
 }
 
 export default function FitnessLabOS() {
@@ -517,10 +741,15 @@ export default function FitnessLabOS() {
     () => ({
       id: "",
       name: "No members yet",
+      memberCode: "",
+      phone: "",
       age: "",
       gender: "",
+      dob: "",
       goal: "",
+      nutritionIntervention: "No",
       readinessTrend: "",
+      healthCategory: "HEALTHY",
       phase: "UNCLASSIFIED",
       status: "",
       renewal: "",
@@ -531,34 +760,23 @@ export default function FitnessLabOS() {
       vo2Estimate: "Not assessed",
       movementQuality: "Not assessed",
       trainingHistory: "Not assessed",
+      parqAnswers: {},
+      lifestyleAnswers: {},
+      exerciseHistoryAnswers: {},
+      latestReadiness: null,
+      address: "",
+      email: "",
+      emergencyContactName: "",
+      emergencyContactNumber: "",
+      govtIdType: "",
+      govtIdNumber: "",
+      govtIdFile: "",
+      assessmentLab: {},
+      plans: [],
+      currentPlanId: "",
     }),
     [],
   );
-
-  function mapMemberRow(row) {
-    return {
-      id: row.id,
-      memberCode: row.member_code,
-      phone: row.phone,
-      name: row.full_name,
-      gender: row.gender || "male",
-      dob: row.dob || "",
-      age: row.age ?? "",
-      goal: row.goal || "Fat Loss",
-      readinessTrend: row.readiness_trend || "stable",
-      phase: row.phase || "UNCLASSIFIED",
-      status: row.status || "Active",
-      renewal: row.renewal || "",
-      fms: "Not assessed",
-      pain: "Not assessed",
-      cardio: "Not assessed",
-      cardioCapacity: "Not assessed",
-      vo2Estimate: "Not assessed",
-      movementQuality: "Not assessed",
-      trainingHistory: "Not assessed",
-      trainingAge: "Not assessed",
-    };
-  }
 
   function formatDbSetupError(err) {
     const msg = err?.message || String(err || "");
@@ -782,6 +1000,7 @@ export default function FitnessLabOS() {
         ]
       : [
           ["home", Home, "Dashboard"],
+          ["signup", Users, "Signup"],
           ["members", Users, "Members"],
           ["programming", FileSpreadsheet, "Programming"],
           ["assessments", ClipboardList, "Assessments"],
@@ -949,19 +1168,37 @@ export default function FitnessLabOS() {
                 session={session}
               />
             )}
+            {tab === "signup" && role === "coach" && (
+              <MemberSignup
+                setMembers={setMembers}
+                setSelectedMemberId={setSelectedMemberId}
+                session={session}
+              />
+            )}
             {tab === "profile" && <MemberProfile selectedMember={selectedMember} />}
-            {tab === "recovery" && <Recovery selectedMember={selectedMember} />}
+            {tab === "recovery" && (
+              <Recovery selectedMember={selectedMember} setMembers={setMembers} />
+            )}
             {tab === "assessments" &&
               (role === "member" ? (
                 <MemberAssessments selectedMember={selectedMember} />
               ) : (
-                <Assessments selectedMember={selectedMember} />
+                <Assessments
+                  selectedMember={selectedMember}
+                  setMembers={setMembers}
+                />
               ))}
-            {tab === "programming" && <Programming selectedMember={selectedMember} />}
+            {tab === "programming" && (
+              <Programming
+                selectedMember={selectedMember}
+                setMembers={setMembers}
+                session={session}
+              />
+            )}
             {tab === "train" && <Training selectedMember={selectedMember} />}
             {tab === "progress" && <Progress selectedMember={selectedMember} />}
-            {tab === "reports" && <Reports members={members} />}
-            {tab === "admin" && <Admin members={members} />}
+            {tab === "reports" && <Reports members={members} session={session} />}
+            {tab === "admin" && <Admin members={members} session={session} />}
           </motion.div>
         </main>
       </div>
@@ -1001,7 +1238,7 @@ function HomeDashboard({
         <div className="grid gap-4 md:grid-cols-3">
           <MetricCard
             label="Readiness"
-            value={`${sampleReadiness}/100`}
+            value={`${selectedMember.latestReadiness ?? sampleReadiness}/100`}
             icon={Droplets}
           />
           <MetricCard
@@ -1198,6 +1435,11 @@ function Members({
   setSelectedMemberId,
   session,
 }) {
+  const [parqAnswers, setParqAnswers] = useState({});
+  const [lifestyleAnswers, setLifestyleAnswers] = useState({});
+  const [exerciseHistoryAnswers, setExerciseHistoryAnswers] = useState({});
+  const [editingId, setEditingId] = useState(null);
+
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -1205,106 +1447,203 @@ function Members({
     dob: "",
     age: "",
     goal: "Fat Loss",
+    nutritionIntervention: "No",
     readinessTrend: "stable",
+    healthCategory: "HEALTHY",
   });
 
-  const [creating, setCreating] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [createdMember, setCreatedMember] = useState(null);
-  const [createError, setCreateError] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [infoMsg, setInfoMsg] = useState("");
 
-  async function addMember() {
-    setCreateError("");
+  function resetForm() {
+    setEditingId(null);
+    setForm({
+      name: "",
+      phone: "",
+      gender: "male",
+      dob: "",
+      age: "",
+      goal: "Fat Loss",
+      nutritionIntervention: "No",
+      readinessTrend: "stable",
+      healthCategory: "HEALTHY",
+    });
+    setParqAnswers({});
+    setLifestyleAnswers({});
+    setExerciseHistoryAnswers({});
+  }
+
+  function startEdit(member) {
+    setInfoMsg("");
+    setErrorMsg("");
+    setCreatedMember(null);
+    setEditingId(String(member.id));
+    setForm({
+      name: member.name || "",
+      phone: member.phone || "",
+      gender: member.gender || "male",
+      dob: member.dob || "",
+      age: member.age || "",
+      goal: member.goal || "Fat Loss",
+      nutritionIntervention: member.nutritionIntervention || "No",
+      readinessTrend: member.readinessTrend || "stable",
+      healthCategory: member.healthCategory || "HEALTHY",
+    });
+    setParqAnswers(member.parqAnswers || {});
+    setLifestyleAnswers(member.lifestyleAnswers || {});
+    setExerciseHistoryAnswers(member.exerciseHistoryAnswers || {});
+  }
+
+  async function deleteMember(memberId) {
+    setErrorMsg("");
+    setInfoMsg("");
+    if (!supabase || !session?.user?.id) {
+      setErrorMsg("Not signed in, or Supabase not configured");
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from("members").delete().eq("id", memberId);
+      if (error) throw error;
+
+      setMembers((prev) => prev.filter((m) => String(m.id) !== String(memberId)));
+      setInfoMsg("Member deleted");
+    } catch (e) {
+      setErrorMsg(e?.message || "Failed to delete member");
+    }
+  }
+
+  function formatDbSetupError(err) {
+    const msg = err?.message || String(err || "");
+    if (msg.includes("Could not find the table 'public.members'")) {
+      return "Supabase DB not initialized: run supabase/schema.sql in Supabase SQL Editor, then go to Settings → API → Reload schema cache.";
+    }
+    return msg || "Database error";
+  }
+
+  function isMissingColumnError(err) {
+    const msg = err?.message || String(err || "");
+    return msg.includes("does not exist") && msg.includes("column");
+  }
+
+  async function saveMember() {
+    setErrorMsg("");
+    setInfoMsg("");
     setCreatedMember(null);
 
     if (!supabase || !session?.user?.id) {
-      setCreateError("Not signed in, or Supabase not configured");
+      setErrorMsg("Not signed in, or Supabase not configured");
       return;
     }
 
     if (!form.name.trim()) {
-      setCreateError("Enter full name");
+      setErrorMsg("Enter full name");
       return;
     }
 
     const phone = normalizePhoneE164(form.phone);
     if (!phone) {
-      setCreateError("Enter phone in E.164 format (e.g. +919876543210)");
+      setErrorMsg("Enter phone in E.164 format (e.g. +919876543210)");
       return;
     }
 
-    setCreating(true);
+    setSaving(true);
+
+    const calculatedAge = calculateAgeFromDOB(form.dob);
+    const basePayload = {
+      full_name: normalizeFullName(form.name),
+      phone,
+      gender: form.gender,
+      dob: form.dob || null,
+      age: Number(calculatedAge || form.age || 0) || null,
+      goal: form.goal,
+      readiness_trend: form.readinessTrend,
+    };
+
+    const extendedPayload = {
+      nutrition_intervention: form.nutritionIntervention,
+      health_category: form.healthCategory,
+      parq_answers: parqAnswers,
+      lifestyle_answers: lifestyleAnswers,
+      exercise_history_answers: exerciseHistoryAnswers,
+    };
+
     try {
-      const calculatedAge = calculateAgeFromDOB(form.dob);
-      const memberCode = generateMemberCode();
+      if (editingId) {
+        const attemptPayload = { ...basePayload, ...extendedPayload };
+        let result = await supabase
+          .from("members")
+          .update(attemptPayload)
+          .eq("id", editingId)
+          .select("*")
+          .single();
 
-      const payload = {
-        coach_id: session.user.id,
-        member_code: memberCode,
-        full_name: normalizeFullName(form.name),
-        phone,
-        gender: form.gender,
-        dob: form.dob || null,
-        age: Number(calculatedAge || form.age || 0) || null,
-        goal: form.goal,
-        readiness_trend: form.readinessTrend,
-        phase: "UNCLASSIFIED",
-        status: "Active",
-        renewal: "2026-07-01",
-      };
+        if (result.error && isMissingColumnError(result.error)) {
+          result = await supabase
+            .from("members")
+            .update(basePayload)
+            .eq("id", editingId)
+            .select("*")
+            .single();
+          if (result.error) throw result.error;
+          setInfoMsg("Saved. (Extra intake fields are not persisted until you update Supabase schema.)");
+        }
 
-      const { data, error } = await supabase
-        .from("members")
-        .insert(payload)
-        .select("*")
-        .single();
+        if (result.error) throw result.error;
 
-      if (error) throw error;
-
-      const uiMember = {
-        id: data.id,
-        memberCode: data.member_code,
-        phone: data.phone,
-        name: data.full_name,
-        gender: data.gender || "male",
-        dob: data.dob || "",
-        age: data.age ?? "",
-        goal: data.goal || "Fat Loss",
-        readinessTrend: data.readiness_trend || "stable",
-        fms: "Not assessed",
-        pain: "Not assessed",
-        cardioCapacity: "Not assessed",
-        vo2Estimate: "Not assessed",
-        movementQuality: "Not assessed",
-        trainingHistory: "Not assessed",
-        phase: data.phase || "UNCLASSIFIED",
-        status: data.status || "Active",
-        renewal: data.renewal || "",
-      };
-
-      setMembers((prev) => [uiMember, ...prev]);
-      setSelectedMemberId(String(uiMember.id));
-      setCreatedMember({ memberCode, phone });
-
-      setForm({
-        name: "",
-        phone: "",
-        gender: "male",
-        dob: "",
-        age: "",
-        goal: "Fat Loss",
-        readinessTrend: "stable",
-      });
-    } catch (e) {
-      const msg = e?.message || "Failed to create member";
-      if (msg.includes("Could not find the table 'public.members'")) {
-        setCreateError(
-          "Supabase DB not initialized: run supabase/schema.sql in Supabase SQL Editor, then go to Settings → API → Reload schema cache.",
-        );
+        const updated = {
+          ...mapMemberRow(result.data),
+          parqAnswers,
+          lifestyleAnswers,
+          exerciseHistoryAnswers,
+        };
+        setMembers((prev) => prev.map((m) => (String(m.id) === String(updated.id) ? updated : m)));
+        setSelectedMemberId(String(updated.id));
+        setEditingId(null);
+        setInfoMsg((prev) => prev || "Member updated");
       } else {
-        setCreateError(msg);
+        const memberCode = generateMemberCode();
+        const insertBase = {
+          coach_id: session.user.id,
+          member_code: memberCode,
+          phase: "UNCLASSIFIED",
+          status: "Active",
+          renewal: "2026-07-01",
+          ...basePayload,
+        };
+
+        const insertAttempt = { ...insertBase, ...extendedPayload };
+
+        let result = await supabase.from("members").insert(insertAttempt).select("*").single();
+
+        if (result.error && isMissingColumnError(result.error)) {
+          result = await supabase.from("members").insert(insertBase).select("*").single();
+          if (result.error) throw result.error;
+          setInfoMsg("Created. (Extra intake fields are not persisted until you update Supabase schema.)");
+        }
+
+        if (result.error) throw result.error;
+
+        const uiMember = {
+          ...mapMemberRow(result.data),
+          parqAnswers,
+          lifestyleAnswers,
+          exerciseHistoryAnswers,
+          nutritionIntervention: form.nutritionIntervention,
+          healthCategory: form.healthCategory,
+        };
+
+        setMembers((prev) => [uiMember, ...prev]);
+        setSelectedMemberId(String(uiMember.id));
+        setCreatedMember({ memberCode, phone });
+        resetForm();
       }
+    } catch (e) {
+      setErrorMsg(formatDbSetupError(e));
     } finally {
-      setCreating(false);
+      setSaving(false);
     }
   }
 
@@ -1370,21 +1709,109 @@ function Members({
                 ))}
               </Select>
             </div>
+
+            <div>
+              <p className="mb-1 text-xs font-bold uppercase text-slate-400">Nutrition Intervention Required</p>
+              <Select
+                value={form.nutritionIntervention || "No"}
+                onChange={(v) => setForm({ ...form, nutritionIntervention: v })}
+              >
+                <option value="Yes">Yes</option>
+                <option value="No">No</option>
+              </Select>
+            </div>
+
+            <div>
+              <p className="mb-1 text-xs font-bold uppercase text-slate-400">Health Category</p>
+              <Select value={form.healthCategory} onChange={(v) => setForm({ ...form, healthCategory: v })}>
+                <option value="HEALTHY">HEALTHY</option>
+                <option value="SPECIAL POPULATION">SPECIAL POPULATION</option>
+              </Select>
+            </div>
+
+            <div className="rounded-3xl bg-slate-50 p-4 space-y-4">
+              <div>
+                <h4 className="text-base font-black">PAR-Q Screening</h4>
+                <div className="mt-3 space-y-2">
+                  {parqQuestions.map((q) => (
+                    <div key={q} className="flex items-center justify-between rounded-2xl bg-white p-3 gap-3">
+                      <p className="text-sm font-medium text-slate-700">{q}</p>
+                      <Select value={parqAnswers[q] || "no"} onChange={(v) => setParqAnswers({ ...parqAnswers, [q]: v })}>
+                        <option value="no">No</option>
+                        <option value="yes">Yes</option>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-base font-black">Exercise History — FITT</h4>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {exerciseHistoryQuestions.map((item) => (
+                    <div key={item.key}>
+                      <p className="mb-1 text-xs font-bold uppercase text-slate-400">{item.label}</p>
+                      <Select
+                        value={exerciseHistoryAnswers[item.key] || item.options[0]}
+                        onChange={(v) => setExerciseHistoryAnswers({ ...exerciseHistoryAnswers, [item.key]: v })}
+                      >
+                        {item.options.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-base font-black">Lifestyle / Health History</h4>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {lifestyleQuestions.map((item) => (
+                    <div key={item.key}>
+                      <p className="mb-1 text-xs font-bold uppercase text-slate-400">{item.label}</p>
+                      <Select
+                        value={lifestyleAnswers[item.key] || item.options[0]}
+                        onChange={(v) => setLifestyleAnswers({ ...lifestyleAnswers, [item.key]: v })}
+                      >
+                        {item.options.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             <div className="flex gap-2">
               <Button
-                onClick={addMember}
-                disabled={creating}
+                onClick={saveMember}
+                disabled={saving}
                 className="flex-1 rounded-2xl bg-slate-950"
               >
                 <Plus size={16} className="mr-2" />
-                {creating ? "Creating…" : "Create Member"}
+                {saving ? "Saving…" : editingId ? "Update Member" : "Create Member"}
               </Button>
+              {editingId && (
+                <Button variant="outline" className="flex-1 rounded-2xl" onClick={resetForm}>
+                  Cancel
+                </Button>
+              )}
             </div>
 
-            {createError && (
+            {errorMsg && (
               <div className="rounded-2xl bg-red-50 p-3 text-sm text-red-700">
-                {createError}
+                {errorMsg}
               </div>
+            )}
+
+            {infoMsg && !errorMsg && (
+              <div className="rounded-2xl bg-blue-50 p-3 text-sm text-blue-800">{infoMsg}</div>
             )}
 
             {createdMember && (
@@ -1429,13 +1856,31 @@ function Members({
                         </p>
                       )}
                     </div>
-                    <Badge
-                      tone={
-                        m.phase === "UNCLASSIFIED" ? "unclassified" : m.phase.toLowerCase()
-                      }
-                    >
-                      {m.phase}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge tone={m.phase === "UNCLASSIFIED" ? "unclassified" : m.phase.toLowerCase()}>
+                        {m.phase}
+                      </Badge>
+                      <Button
+                        variant="outline"
+                        className="rounded-xl px-3 py-1 text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEdit(m);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="rounded-xl px-3 py-1 text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteMember(m.id);
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    </div>
                   </div>
                 </button>
               ))}
@@ -1443,6 +1888,265 @@ function Members({
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function MemberSignup({ setMembers, setSelectedMemberId, session }) {
+  const [signup, setSignup] = useState({
+    name: "",
+    gender: "male",
+    dob: "",
+    age: "",
+    address: "",
+    phone: "",
+    email: "",
+    emergencyContactName: "",
+    emergencyContactNumber: "",
+    govtIdType: "Aadhar",
+    govtIdNumber: "",
+    govtIdFile: "",
+  });
+  const [govtIdFileObj, setGovtIdFileObj] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [createdMember, setCreatedMember] = useState(null);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [infoMsg, setInfoMsg] = useState("");
+
+  function isMissingColumnError(err) {
+    const msg = err?.message || String(err || "");
+    return msg.includes("does not exist") && msg.includes("column");
+  }
+
+  function formatDbSetupError(err) {
+    const msg = err?.message || String(err || "");
+    if (msg.includes("Could not find the table 'public.members'")) {
+      return "Supabase DB not initialized: run supabase/schema.sql in Supabase SQL Editor, then go to Settings → API → Reload schema cache.";
+    }
+    return msg || "Database error";
+  }
+
+  async function submitSignup() {
+    setErrorMsg("");
+    setInfoMsg("");
+    setSaved(false);
+    setCreatedMember(null);
+
+    if (!supabase || !session?.user?.id) {
+      setErrorMsg("Not signed in, or Supabase not configured");
+      return;
+    }
+
+    if (!signup.name.trim()) {
+      setErrorMsg("Enter full name");
+      return;
+    }
+
+    const phone = normalizePhoneE164(signup.phone);
+    if (!phone) {
+      setErrorMsg("Enter phone in E.164 format (e.g. +919876543210)");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const memberCode = generateMemberCode();
+      const calculatedAge = calculateAgeFromDOB(signup.dob);
+
+      const basePayload = {
+        coach_id: session.user.id,
+        member_code: memberCode,
+        full_name: normalizeFullName(signup.name),
+        phone,
+        gender: signup.gender,
+        dob: signup.dob || null,
+        age: Number(calculatedAge || signup.age || 0) || null,
+        goal: "Pending coach allocation",
+        readiness_trend: "Not started",
+        phase: "UNCLASSIFIED",
+        status: "Pending Assessment",
+        renewal: null,
+      };
+
+      const extendedPayload = {
+        address: signup.address,
+        email: signup.email,
+        emergency_contact_name: signup.emergencyContactName,
+        emergency_contact_number: signup.emergencyContactNumber,
+        govt_id_type: signup.govtIdType,
+        govt_id_number: signup.govtIdNumber,
+        govt_id_file: signup.govtIdFile,
+      };
+
+      let result = await supabase
+        .from("members")
+        .insert({ ...basePayload, ...extendedPayload })
+        .select("*")
+        .single();
+
+      if (result.error && isMissingColumnError(result.error)) {
+        result = await supabase.from("members").insert(basePayload).select("*").single();
+        if (result.error) throw result.error;
+        setInfoMsg("Signup saved. (Extra fields will persist after Supabase schema update.)");
+      }
+
+      if (result.error) throw result.error;
+
+      let finalRow = result.data;
+
+      if (govtIdFileObj) {
+        const docId = crypto?.randomUUID ? crypto.randomUUID() : String(Date.now());
+        const safeName = String(govtIdFileObj.name || "govt-id").replace(/\s+/g, "-");
+        const docPath = `members/${finalRow.id}/${docId}-${safeName}`;
+        const upload = await supabase.storage
+          .from("member-docs")
+          .upload(docPath, govtIdFileObj, {
+            contentType: govtIdFileObj.type || undefined,
+            upsert: true,
+          });
+        if (upload.error) throw upload.error;
+
+        const { data: updated, error: updErr } = await supabase
+          .from("members")
+          .update({ govt_id_file: docPath })
+          .eq("id", finalRow.id)
+          .select("*")
+          .single();
+        if (updErr) throw updErr;
+        finalRow = updated;
+      }
+
+      const uiMember = {
+        ...mapMemberRow(finalRow),
+        address: signup.address,
+        email: signup.email,
+        emergencyContactName: signup.emergencyContactName,
+        emergencyContactNumber: signup.emergencyContactNumber,
+        govtIdType: signup.govtIdType,
+        govtIdNumber: signup.govtIdNumber,
+        govtIdFile: finalRow.govt_id_file || signup.govtIdFile,
+      };
+
+      setMembers((prev) => [uiMember, ...prev]);
+      setSelectedMemberId(String(uiMember.id));
+      setCreatedMember({ memberCode, phone });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+      setSignup({
+        name: "",
+        gender: "male",
+        dob: "",
+        age: "",
+        address: "",
+        phone: "",
+        email: "",
+        emergencyContactName: "",
+        emergencyContactNumber: "",
+        govtIdType: "Aadhar",
+        govtIdNumber: "",
+        govtIdFile: "",
+      });
+      setGovtIdFileObj(null);
+    } catch (e) {
+      setErrorMsg(formatDbSetupError(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <SectionTitle
+        icon={Users}
+        title="Member Signup Page"
+        subtitle="Client-facing signup information is captured here and saved into the coach/admin member list."
+      />
+      <Card className="rounded-3xl border-slate-200 shadow-sm">
+        <CardContent className="space-y-5 p-6">
+          {saved && (
+            <Badge tone="performance">
+              <CheckCircle2 size={14} className="mr-1" /> Signup Saved
+            </Badge>
+          )}
+
+          {errorMsg && (
+            <div className="rounded-2xl bg-red-50 p-4 text-sm text-red-700">{errorMsg}</div>
+          )}
+
+          {infoMsg && !errorMsg && (
+            <div className="rounded-2xl bg-blue-50 p-4 text-sm text-blue-800">{infoMsg}</div>
+          )}
+
+          {createdMember && (
+            <div className="rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-800">
+              <p className="font-bold">Member created</p>
+              <p className="mt-1">
+                Member ID: <span className="font-black">{createdMember.memberCode}</span>
+              </p>
+              <p className="text-xs text-emerald-900/70">Member logs in with this ID + {createdMember.phone}.</p>
+            </div>
+          )}
+
+          <div className="rounded-3xl bg-slate-50 p-5">
+            <h3 className="mb-4 text-lg font-black">Basic Information</h3>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Input placeholder="Full name" value={signup.name} onChange={(e) => setSignup({ ...signup, name: e.target.value })} />
+              <Input placeholder="Phone number (e.g. +919876543210)" value={signup.phone} onChange={(e) => setSignup({ ...signup, phone: e.target.value })} />
+              <Input placeholder="Email address" type="email" value={signup.email} onChange={(e) => setSignup({ ...signup, email: e.target.value })} />
+              <Input placeholder="Residential address" value={signup.address} onChange={(e) => setSignup({ ...signup, address: e.target.value })} />
+              <Select value={signup.gender} onChange={(v) => setSignup({ ...signup, gender: v })}>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="other">Other / Prefer not to say</option>
+              </Select>
+              <Input
+                type="date"
+                value={signup.dob}
+                onChange={(e) => setSignup({ ...signup, dob: e.target.value, age: calculateAgeFromDOB(e.target.value) })}
+              />
+              <Input placeholder="Age auto-calculated" value={signup.age} readOnly />
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-slate-50 p-5">
+            <h3 className="mb-4 text-lg font-black">Emergency Contact</h3>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Input placeholder="Emergency Contact Name" value={signup.emergencyContactName} onChange={(e) => setSignup({ ...signup, emergencyContactName: e.target.value })} />
+              <Input placeholder="Emergency Contact Number" value={signup.emergencyContactNumber} onChange={(e) => setSignup({ ...signup, emergencyContactNumber: e.target.value })} />
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-slate-50 p-5">
+            <h3 className="mb-4 text-lg font-black">Government ID Proof</h3>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Select value={signup.govtIdType} onChange={(v) => setSignup({ ...signup, govtIdType: v })}>
+                <option value="Aadhar">Aadhar</option>
+                <option value="Passport">Passport</option>
+                <option value="Other Govt ID">Other Govt ID</option>
+              </Select>
+              <Input placeholder="Government ID number" value={signup.govtIdNumber} onChange={(e) => setSignup({ ...signup, govtIdNumber: e.target.value })} />
+            </div>
+            <div className="mt-3">
+              <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">Upload Govt ID proof</p>
+              <Input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={(e) => {
+                  const fileObj = e.target.files?.[0] || null;
+                  setGovtIdFileObj(fileObj);
+                  setSignup({ ...signup, govtIdFile: fileObj?.name || "" });
+                }}
+              />
+              {signup.govtIdFile && <p className="mt-1 text-xs text-slate-500">Selected: {signup.govtIdFile}</p>}
+            </div>
+          </div>
+
+          <Button onClick={submitSignup} disabled={saving} className="w-full rounded-2xl bg-slate-950">
+            <Save size={16} className="mr-2" /> {saving ? "Saving…" : "Save Signup"}
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -1480,6 +2184,12 @@ function MemberProfile({ selectedMember }) {
             <Mini label="Age" value={selectedMember.age || "—"} />
             <Mini label="Gender" value={selectedMember.gender || "—"} />
             <Mini label="Goal" value={selectedMember.goal || "—"} />
+            <Mini label="Phone" value={selectedMember.phone || "—"} />
+            <Mini label="Email" value={selectedMember.email || "—"} />
+            <Mini label="Address" value={selectedMember.address || "—"} />
+            <Mini label="Govt ID" value={selectedMember.govtIdType ? `${selectedMember.govtIdType} submitted` : "—"} />
+            <Mini label="Emergency Name" value={selectedMember.emergencyContactName || "—"} />
+            <Mini label="Emergency Number" value={selectedMember.emergencyContactNumber || "—"} />
           </div>
 
           <div className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
@@ -1491,7 +2201,11 @@ function MemberProfile({ selectedMember }) {
   );
 }
 
-function Recovery({ selectedMember }) {
+function Recovery({ selectedMember, setMembers }) {
+  const isSpecialPopulation =
+    selectedMember.goal === "Special Population" ||
+    selectedMember.healthCategory === "SPECIAL POPULATION";
+
   const journalQuestions = [
     {
       label: "How many hours did you sleep last night?",
@@ -1559,6 +2273,31 @@ function Recovery({ selectedMember }) {
       emoji: "🥤",
       principle: "Thirst is treated as a hydration warning signal.",
     },
+    ...(isSpecialPopulation
+      ? [
+          {
+            label: "Resting Heart Rate",
+            key: "restingHR",
+            type: "metric",
+            emoji: "❤️",
+            principle: "Daily resting HR monitoring for special populations.",
+          },
+          {
+            label: "Systolic Blood Pressure",
+            key: "systolicBP",
+            type: "metric",
+            emoji: "🩺",
+            principle: "Blood pressure screening for exercise safety.",
+          },
+          {
+            label: "Diastolic Blood Pressure",
+            key: "diastolicBP",
+            type: "metric",
+            emoji: "🩺",
+            principle: "Blood pressure monitoring requirement.",
+          },
+        ]
+      : []),
   ];
 
   const [data, setData] = useState({
@@ -1572,6 +2311,9 @@ function Recovery({ selectedMember }) {
     hydration: "good",
     urineColor: "pale",
     thirst: "none",
+    restingHR: "",
+    systolicBP: "",
+    diastolicBP: "",
   });
 
   const score = readinessScore(data);
@@ -1652,13 +2394,22 @@ function Recovery({ selectedMember }) {
                         className="w-full"
                       />
                       <div className="mt-2 flex items-center justify-between text-sm font-semibold text-slate-500">
-                        <span>0 h</span>
+                        <span>{q.min} h</span>
                         <span className="text-lg font-black text-slate-950">
                           {data[q.key]} h
                         </span>
-                        <span>12 h</span>
+                        <span>{q.max} h</span>
                       </div>
                     </div>
+                  )}
+
+                  {q.type === "metric" && (
+                    <Input
+                      type="number"
+                      placeholder={q.label}
+                      value={data[q.key]}
+                      onChange={(e) => setData({ ...data, [q.key]: e.target.value })}
+                    />
                   )}
 
                   {q.type === "hydration" && (
@@ -1732,7 +2483,35 @@ function Recovery({ selectedMember }) {
                 </div>
               ))}
             </div>
-            <SaveButton className="mt-5 w-full">Save Daily Readiness</SaveButton>
+            <SaveButton
+              className="mt-5 w-full"
+              onSave={async () => {
+                if (!supabase || !selectedMember?.id) return;
+                const scoreNow = readinessScore(data);
+                const payload = {
+                  member_id: selectedMember.id,
+                  log_date: data.date,
+                  score: scoreNow,
+                  data,
+                };
+                const { error: logErr } = await supabase.from("readiness_logs").insert(payload);
+                if (logErr) throw logErr;
+                const { error: updErr } = await supabase
+                  .from("members")
+                  .update({ latest_readiness: scoreNow })
+                  .eq("id", selectedMember.id);
+                if (updErr) throw updErr;
+                setMembers?.((prev) =>
+                  prev.map((m) =>
+                    String(m.id) === String(selectedMember.id)
+                      ? { ...m, latestReadiness: scoreNow }
+                      : m,
+                  ),
+                );
+              }}
+            >
+              Save Daily Readiness
+            </SaveButton>
           </CardContent>
         </Card>
 
@@ -1780,7 +2559,7 @@ function Recovery({ selectedMember }) {
   );
 }
 
-function Assessments({ selectedMember }) {
+function Assessments({ selectedMember, setMembers }) {
   const tabs = [
     "Classification",
     "Body Composition",
@@ -1814,22 +2593,28 @@ function Assessments({ selectedMember }) {
       </div>
       <Card className="rounded-3xl border-slate-200 shadow-sm">
         <CardContent className="p-5">
-          <AssessmentFields active={active} selectedMember={selectedMember} />
+          <AssessmentFields
+            active={active}
+            selectedMember={selectedMember}
+            setMembers={setMembers}
+          />
         </CardContent>
       </Card>
     </div>
   );
 }
 
-function AssessmentFields({ active, selectedMember }) {
+function AssessmentFields({ active, selectedMember, setMembers }) {
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const sectionRef = useRef(null);
   const [gender, setGender] = useState("male");
   const [age, setAge] = useState(selectedMember.age || 30);
   const [cardioMethod, setCardioMethod] = useState("fox");
   const [selectedMobilityTest, setSelectedMobilityTest] = useState("Sit & Reach");
   const [selectedBalanceTest, setSelectedBalanceTest] = useState("Y Balance Test");
 
-  const [classificationData, setClassificationData] = useState({
+  const makeClassificationDataFromMember = (member) => ({
     deepSquat: 2,
     hurdleStep: 2,
     inlineLunge: 2,
@@ -1837,22 +2622,139 @@ function AssessmentFields({ active, selectedMember }) {
     activeStraightLegRaise: 2,
     trunkStabilityPushup: 2,
     rotaryStability: 2,
-    pain: selectedMember.pain === "Not assessed" ? 0 : selectedMember.pain || 0,
+    pain: member?.pain === "Not assessed" ? 0 : member?.pain || 0,
     vo2Estimate:
-      selectedMember.vo2Estimate === "Not assessed"
+      member?.vo2Estimate === "Not assessed"
         ? 35
-        : selectedMember.vo2Estimate || 35,
+        : member?.vo2Estimate || 35,
     movementQuality:
-      selectedMember.movementQuality === "Not assessed"
+      member?.movementQuality === "Not assessed"
         ? "moderate"
-        : selectedMember.movementQuality || "moderate",
+        : member?.movementQuality || "moderate",
     trainingHistory:
-      selectedMember.trainingHistory === "Not assessed"
+      member?.trainingHistory === "Not assessed"
         ? "general_activity"
-        : selectedMember.trainingHistory || "general_activity",
+        : member?.trainingHistory || "general_activity",
   });
 
-  function saveSection() {
+  const [classificationData, setClassificationData] = useState(() =>
+    makeClassificationDataFromMember(selectedMember),
+  );
+
+  useEffect(() => {
+    setAge(selectedMember?.age || 30);
+    setClassificationData(makeClassificationDataFromMember(selectedMember));
+  }, [selectedMember?.id]);
+
+  function collectSectionValues(root) {
+    if (!root) return {};
+    const values = {};
+    const fields = root.querySelectorAll("input, textarea, select");
+    fields.forEach((el) => {
+      if (el.tagName.toLowerCase() === "input" && el.type === "file") return;
+      const key = el.name || el.getAttribute("placeholder") || el.id;
+      if (!key) return;
+      values[key] = el.value;
+    });
+    return values;
+  }
+
+  useEffect(() => {
+    const savedSection = selectedMember?.assessmentLab?.[active];
+    if (!savedSection) return;
+
+    if (savedSection.gender) setGender(savedSection.gender);
+    if (savedSection.age) setAge(savedSection.age);
+    if (savedSection.cardioMethod) setCardioMethod(savedSection.cardioMethod);
+    if (savedSection.selectedMobilityTest)
+      setSelectedMobilityTest(savedSection.selectedMobilityTest);
+    if (savedSection.selectedBalanceTest)
+      setSelectedBalanceTest(savedSection.selectedBalanceTest);
+    if (savedSection.classificationData)
+      setClassificationData(savedSection.classificationData);
+
+    const root = sectionRef.current;
+    if (!root) return;
+    requestAnimationFrame(() => {
+      const fields = root.querySelectorAll("input, textarea, select");
+      fields.forEach((el) => {
+        if (el.tagName.toLowerCase() === "input" && el.type === "file") return;
+        const key = el.name || el.getAttribute("placeholder") || el.id;
+        if (!key) return;
+        const nextValue = savedSection[key];
+        if (nextValue === undefined || nextValue === null) return;
+        el.value = String(nextValue);
+      });
+    });
+  }, [active, selectedMember?.id]);
+
+  async function saveSection() {
+    setSaveError("");
+    if (!supabase || !selectedMember?.id) return;
+
+    const sectionValues = collectSectionValues(sectionRef.current);
+    const sectionPayload = {
+      savedAt: new Date().toISOString(),
+      ...sectionValues,
+      gender,
+      age,
+      cardioMethod,
+      selectedMobilityTest,
+      selectedBalanceTest,
+    };
+
+    if (active === "Classification") {
+      sectionPayload.classificationData = classificationData;
+      sectionPayload.fmsTotal = fmsTotal;
+      sectionPayload.cardioCategory = cardioCategory;
+      sectionPayload.calculatedPhase = calculatedPhase;
+    }
+
+    if (active === "Body Composition") {
+      const jp = calculateJacksonPollock3Site({
+        gender,
+        age,
+        chest: sectionValues["Chest skinfold in mm"],
+        abdomen: sectionValues["Abdomen skinfold in mm"],
+        thigh: sectionValues["Thigh skinfold in mm"],
+        triceps: sectionValues["Triceps skinfold in mm"],
+        suprailiac: sectionValues["Suprailiac skinfold in mm"],
+      });
+      if (jp) sectionPayload.jacksonPollock = jp;
+    }
+
+    const nextAssessmentLab = {
+      ...(selectedMember.assessmentLab || {}),
+      [active]: sectionPayload,
+    };
+
+    const updates = {
+      assessment_lab: nextAssessmentLab,
+    };
+
+    // Keep member "headline" fields in sync for Classification only.
+    if (active === "Classification") {
+      updates.fms_total = fmsTotal;
+      updates.pain_nprs = Number(classificationData.pain || 0);
+      updates.vo2_estimate = Number(classificationData.vo2Estimate || 0);
+      updates.movement_quality = classificationData.movementQuality;
+      updates.training_history = classificationData.trainingHistory;
+      updates.phase = calculatedPhase;
+    }
+
+    const { data, error } = await supabase
+      .from("members")
+      .update(updates)
+      .eq("id", selectedMember.id)
+      .select("*")
+      .single();
+    if (error) {
+      setSaveError(error.message || String(error));
+      throw error;
+    }
+
+    const mapped = mapMemberRow(data);
+    setMembers?.((prev) => prev.map((m) => (String(m.id) === String(mapped.id) ? mapped : m)));
     setSaved(true);
     setTimeout(() => setSaved(false), 1800);
   }
@@ -2117,6 +3019,9 @@ function AssessmentFields({ active, selectedMember }) {
                 <CheckCircle2 size={14} className="mr-1" /> Saved
               </Badge>
             )}
+            {saveError && (
+              <Badge tone="unclassified">Save failed</Badge>
+            )}
             <Button onClick={saveSection} className="rounded-2xl bg-slate-950">
               <Save size={16} className="mr-2" /> Save {active}
             </Button>
@@ -2124,6 +3029,11 @@ function AssessmentFields({ active, selectedMember }) {
         </div>
       </div>
 
+      {saveError && (
+        <div className="mb-4 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{saveError}</div>
+      )}
+
+      <div ref={sectionRef}>
       {active === "Classification" && (
         <div className="space-y-5">
           <div className="rounded-3xl bg-slate-50 p-5">
@@ -2222,7 +3132,7 @@ function AssessmentFields({ active, selectedMember }) {
       {active === "Body Composition" && (
         <div className="space-y-5">
           <div className="grid gap-3 md:grid-cols-3">
-            <Select value={gender} onChange={setGender}>
+            <Select name="bodyComp.gender" value={gender} onChange={setGender}>
               <option value="male">Male</option>
               <option value="female">Female</option>
             </Select>
@@ -2385,11 +3295,80 @@ function AssessmentFields({ active, selectedMember }) {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }
 
-function Programming({ selectedMember }) {
+function Programming({ selectedMember, setMembers, session }) {
+  const [file, setFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [infoMsg, setInfoMsg] = useState("");
+
+  async function savePlan() {
+    setErrorMsg("");
+    setInfoMsg("");
+    if (!supabase) {
+      setErrorMsg("Supabase not configured");
+      return;
+    }
+    if (!session?.user?.id) {
+      setErrorMsg("Not signed in");
+      return;
+    }
+    if (!selectedMember?.id) {
+      setErrorMsg("Select a member first");
+      return;
+    }
+    if (!file) {
+      setErrorMsg("Choose a PDF/Excel file first");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const planId = crypto?.randomUUID ? crypto.randomUUID() : String(Date.now());
+      const safeName = String(file.name || "plan").replace(/\s+/g, "-");
+      const storagePath = `members/${selectedMember.id}/${planId}-${safeName}`;
+      const upload = await supabase.storage
+        .from("member-plans")
+        .upload(storagePath, file, { contentType: file.type || undefined, upsert: true });
+      if (upload.error) throw upload.error;
+
+      const planRecord = {
+        id: planId,
+        name: file.name,
+        type: file.type || "application/octet-stream",
+        status: "Coach uploaded",
+        storagePath,
+        fileName: file.name,
+        uploadedAt: new Date().toISOString(),
+      };
+
+      const nextPlans = Array.isArray(selectedMember.plans) ? [...selectedMember.plans] : [];
+      nextPlans.unshift(planRecord);
+
+      const { data, error } = await supabase
+        .from("members")
+        .update({ plans: nextPlans, current_plan_id: planId })
+        .eq("id", selectedMember.id)
+        .select("*")
+        .single();
+      if (error) throw error;
+
+      const mapped = mapMemberRow(data);
+      setMembers?.((prev) => prev.map((m) => (String(m.id) === String(mapped.id) ? mapped : m)));
+      setInfoMsg("Plan uploaded and linked to member.");
+      setFile(null);
+    } catch (e) {
+      setErrorMsg(e?.message || String(e));
+      throw e;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div>
       <SectionTitle
@@ -2401,41 +3380,106 @@ function Programming({ selectedMember }) {
         <Card className="rounded-3xl border-slate-200 shadow-sm">
           <CardContent className="p-5">
             <h3 className="text-lg font-black">Upload Plan — {selectedMember.name}</h3>
+            {errorMsg && (
+              <div className="mt-4 rounded-2xl bg-red-50 p-4 text-sm text-red-700">{errorMsg}</div>
+            )}
+            {infoMsg && !errorMsg && (
+              <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-800">{infoMsg}</div>
+            )}
             <div className="mt-4 rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center">
               <Upload className="mx-auto text-slate-400" />
               <p className="mt-3 font-bold">Upload PDF / Excel</p>
               <p className="text-sm text-slate-500">Program file saved to member profile.</p>
-              <Input type="file" className="mt-4" accept=".pdf,.xlsx,.xls" />
+              <Input
+                type="file"
+                className="mt-4"
+                accept=".pdf,.xlsx,.xls"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+              />
             </div>
-            <SaveButton className="mt-4 w-full">Save Plan</SaveButton>
+            <SaveButton className="mt-4 w-full" onSave={savePlan}>
+              {saving ? "Uploading…" : "Save Plan"}
+            </SaveButton>
           </CardContent>
         </Card>
-        <CalendarPlanner />
+        <CalendarPlanner selectedMember={selectedMember} session={session} />
       </div>
     </div>
   );
 }
 
-function CalendarPlanner() {
+function CalendarPlanner({ selectedMember, session }) {
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [intensity, setIntensity] = useState("moderate");
+  const [focus, setFocus] = useState("");
+  const [rpeTarget, setRpeTarget] = useState("");
+
+  async function saveSessionPlan() {
+    if (!supabase || !session?.user?.id || !selectedMember?.id) return;
+    const payload = {
+      member_id: selectedMember.id,
+      plan_date: date,
+      intensity,
+      focus,
+      rpe_target: rpeTarget,
+    };
+    const { error } = await supabase.from("session_plans").insert(payload);
+    if (error) throw error;
+  }
+
   return (
     <Card className="rounded-3xl border-slate-200 shadow-sm">
       <CardContent className="p-5 space-y-3">
         <h3 className="text-lg font-black">Calendar Planning</h3>
-        <Input type="date" />
-        <Select value="moderate" onChange={() => {}}>
+        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        <Select value={intensity} onChange={setIntensity}>
           <option value="easy">Easy Day</option>
           <option value="moderate">Moderate Day</option>
           <option value="hard">Hard Day</option>
         </Select>
-        <Input placeholder="Session focus e.g. Lower Strength + Zone 2" />
-        <Input placeholder="RPE-based load target e.g. RPE 7" />
-        <SaveButton className="w-full">Save Session Plan</SaveButton>
+        <Input
+          placeholder="Session focus e.g. Lower Strength + Zone 2"
+          value={focus}
+          onChange={(e) => setFocus(e.target.value)}
+        />
+        <Input
+          placeholder="RPE-based load target e.g. RPE 7"
+          value={rpeTarget}
+          onChange={(e) => setRpeTarget(e.target.value)}
+        />
+        <SaveButton className="w-full" onSave={saveSessionPlan}>
+          Save Session Plan
+        </SaveButton>
       </CardContent>
     </Card>
   );
 }
 
 function Training({ selectedMember }) {
+  const planList = Array.isArray(selectedMember.plans) ? selectedMember.plans : [];
+  const initialPlanId = selectedMember.currentPlanId || (planList[0] ? planList[0].id : "");
+  const [selectedPlanId, setSelectedPlanId] = useState(initialPlanId);
+  const [showPlanPreview, setShowPlanPreview] = useState(false);
+  const [planPreviewUrl, setPlanPreviewUrl] = useState("");
+  const [planPreviewLoading, setPlanPreviewLoading] = useState(false);
+
+  const selectedPlan = planList.find((p) => String(p.id) === String(selectedPlanId)) || null;
+
+  async function ensurePlanUrl(plan) {
+    if (!supabase || !plan?.storagePath) return "";
+    setPlanPreviewLoading(true);
+    try {
+      const { data, error } = await supabase.storage
+        .from("member-plans")
+        .createSignedUrl(plan.storagePath, 60 * 10);
+      if (error) throw error;
+      setPlanPreviewUrl(data.signedUrl);
+      return data.signedUrl;
+    } finally {
+      setPlanPreviewLoading(false);
+    }
+  }
+
   const [rows, setRows] = useState([
     {
       category: "Lower Body — Squat Pattern",
@@ -2482,18 +3526,95 @@ function Training({ selectedMember }) {
             </div>
             <Badge tone="dark">View Only</Badge>
           </div>
+
+          <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div className="w-full md:w-[360px]">
+              <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">
+                Select plan
+              </p>
+              <Select
+                value={selectedPlanId}
+                onChange={(v) => {
+                  setSelectedPlanId(v);
+                  setPlanPreviewUrl("");
+                }}
+              >
+                {planList.length ? (
+                  planList.map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No plan uploaded</option>
+                )}
+              </Select>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="rounded-2xl"
+                onClick={async () => {
+                  const next = !showPlanPreview;
+                  setShowPlanPreview(next);
+                  if (next && selectedPlan && !planPreviewUrl) {
+                    await ensurePlanUrl(selectedPlan);
+                  }
+                }}
+                disabled={!selectedPlan}
+              >
+                {showPlanPreview ? "Hide Plan" : "Preview Plan"}
+              </Button>
+              <Button
+                className="rounded-2xl bg-slate-950"
+                onClick={async () => {
+                  if (!selectedPlan) return;
+                  await downloadPlanFile(selectedMember, selectedPlan);
+                }}
+                disabled={!selectedPlan}
+              >
+                <FileSpreadsheet size={16} className="mr-2" /> Download Plan
+              </Button>
+            </div>
+          </div>
+
           <div className="mt-5 rounded-3xl border border-slate-200 bg-slate-50 p-5">
             <p className="text-sm font-bold text-slate-700">
-              Week 1 — Strength + Hybrid Conditioning
+              {selectedPlan?.name || "Coach Plan"}
             </p>
             <p className="mt-2 text-sm text-slate-500">
-              PDF/Excel plan uploaded by coach will appear here for the member to view before logging the workout.
+              {selectedPlan
+                ? `${selectedPlan.type || "PDF / Excel"} • ${selectedPlan.status || "Coach uploaded"}`
+                : "PDF/Excel plan uploaded by coach will appear here for the member to view before logging the workout."}
             </p>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               <Mini label="Today" value="Lower Strength" />
               <Mini label="Intensity" value="RPE 7" />
               <Mini label="Status" value="Pending" />
             </div>
+
+            {showPlanPreview && selectedPlan && (
+              <div className="mt-4 rounded-2xl bg-white p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                  Plan Preview
+                </p>
+                {planPreviewLoading && (
+                  <p className="mt-2 text-sm text-slate-500">Loading preview…</p>
+                )}
+                {!planPreviewLoading && planPreviewUrl && String(selectedPlan.type || "").includes("pdf") && (
+                  <iframe
+                    title="Plan preview"
+                    src={planPreviewUrl}
+                    className="mt-3 h-[520px] w-full rounded-2xl border border-slate-200"
+                  />
+                )}
+                {!planPreviewLoading && (!planPreviewUrl || !String(selectedPlan.type || "").includes("pdf")) && (
+                  <div className="mt-2 text-sm text-slate-600">
+                    Preview is supported for PDF plans. Use “Download Plan” for Excel.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -2623,7 +3744,21 @@ function Training({ selectedMember }) {
             >
               <Plus size={16} className="mr-2" /> Add Exercise
             </Button>
-            <SaveButton>Save Workout</SaveButton>
+            <SaveButton
+              onSave={async () => {
+                if (!supabase || !selectedMember?.id) return;
+                const payload = {
+                  member_id: selectedMember.id,
+                  performed_at: new Date().toISOString().slice(0, 10),
+                  rows,
+                  total_volume: total,
+                };
+                const { error } = await supabase.from("workout_logs").insert(payload);
+                if (error) throw error;
+              }}
+            >
+              Save Workout
+            </SaveButton>
           </div>
         </CardContent>
       </Card>
@@ -2688,7 +3823,16 @@ function Progress({ selectedMember }) {
         subtitle="Scores and trends across readiness, movement, mobility, strength, athleticism and hybrid capacity."
       />
       <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard label="Readiness" value="82" icon={Droplets} />
+        <MetricCard
+          label="Readiness"
+          value={
+            selectedMember?.latestReadiness !== null &&
+            selectedMember?.latestReadiness !== undefined
+              ? String(selectedMember.latestReadiness)
+              : "—"
+          }
+          icon={Droplets}
+        />
         <MetricCard label="Movement" value="74" icon={Activity} />
         <MetricCard label="Strength" value="81" icon={Dumbbell} />
         <MetricCard label="Mobility" value="68" icon={ClipboardList} />
@@ -2707,7 +3851,144 @@ function Progress({ selectedMember }) {
   );
 }
 
-function Reports({ members }) {
+function Reports({ members, session }) {
+  const emailRef = useRef(null);
+  const whatsappRef = useRef(null);
+
+  function buildReportPayload() {
+    return {
+      generated_at: new Date().toISOString(),
+      members: (members || []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        phone: m.phone,
+        goal: m.goal,
+        phase: m.phase,
+        status: m.status,
+        renewal: m.renewal,
+        latestReadiness: m.latestReadiness ?? null,
+        fmsTotal: m.fmsTotal ?? null,
+        pain: m.pain ?? null,
+        vo2Estimate: m.vo2Estimate ?? null,
+      })),
+    };
+  }
+
+  async function logReportExport(format) {
+    if (!supabase || !session?.user?.id) return buildReportPayload();
+    const payload = buildReportPayload();
+    const { error } = await supabase
+      .from("report_exports")
+      .insert({ coach_id: session.user.id, format, payload });
+    if (error) throw error;
+    return payload;
+  }
+
+  async function logReportSend(channel) {
+    if (!supabase || !session?.user?.id) return;
+    const recipient =
+      channel === "email" ? emailRef.current?.value : whatsappRef.current?.value;
+    const payload = buildReportPayload();
+    const { error } = await supabase
+      .from("report_sends")
+      .insert({ coach_id: session.user.id, channel, recipient, payload });
+    if (error) throw error;
+  }
+
+  function downloadCSV(filename, rows) {
+    const escape = (v) => {
+      const s = String(v ?? "");
+      if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const csv = [
+      [
+        "Name",
+        "Phone",
+        "Goal",
+        "Phase",
+        "Status",
+        "Renewal",
+        "Latest Readiness",
+        "FMS Total",
+        "Pain",
+        "VO2 Estimate",
+      ].join(","),
+      ...rows.map((r) =>
+        [
+          r.name,
+          r.phone,
+          r.goal,
+          r.phase,
+          r.status,
+          r.renewal,
+          r.latestReadiness,
+          r.fmsTotal,
+          r.pain,
+          r.vo2Estimate,
+        ]
+          .map(escape)
+          .join(","),
+      ),
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function printReport(payload) {
+    const w = window.open("", "_blank");
+    if (!w) return;
+    const rows = payload?.members || [];
+    const html = `<!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Fitness LAB OS Report</title>
+          <style>
+            body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 24px; }
+            h1 { margin: 0 0 8px; }
+            p { margin: 0 0 16px; color: #444; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background: #f5f5f5; }
+          </style>
+        </head>
+        <body>
+          <h1>Fitness LAB OS — Report</h1>
+          <p>Generated at: ${payload.generated_at}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th><th>Phone</th><th>Goal</th><th>Phase</th><th>Status</th><th>Renewal</th><th>Latest Readiness</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows
+                .map(
+                  (r) =>
+                    `<tr><td>${r.name ?? ""}</td><td>${r.phone ?? ""}</td><td>${r.goal ?? ""}</td><td>${r.phase ?? ""}</td><td>${r.status ?? ""}</td><td>${r.renewal ?? ""}</td><td>${r.latestReadiness ?? ""}</td></tr>`,
+                )
+                .join("\n")}
+            </tbody>
+          </table>
+        </body>
+      </html>`;
+
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  }
+
   return (
     <div>
       <SectionTitle
@@ -2735,16 +4016,66 @@ function Reports({ members }) {
             </div>
 
             <div className="mt-5 grid gap-3 md:grid-cols-2">
-              <Button className="rounded-2xl bg-slate-950">
+              <Button
+                className="rounded-2xl bg-slate-950"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await logReportExport("save");
+                    } catch (e) {
+                      console.error(e);
+                    }
+                  })();
+                }}
+              >
                 <Save size={16} className="mr-2" /> Save Report
               </Button>
-              <Button variant="outline" className="rounded-2xl border-slate-300">
+              <Button
+                variant="outline"
+                className="rounded-2xl border-slate-300"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      const payload = await logReportExport("csv");
+                      const date = payload.generated_at.slice(0, 10);
+                      downloadCSV(`fitness-lab-report-${date}.csv`, payload.members);
+                    } catch (e) {
+                      console.error(e);
+                    }
+                  })();
+                }}
+              >
                 <FileSpreadsheet size={16} className="mr-2" /> Download Excel
               </Button>
-              <Button variant="outline" className="rounded-2xl border-slate-300">
+              <Button
+                variant="outline"
+                className="rounded-2xl border-slate-300"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      const payload = await logReportExport("pdf_print");
+                      printReport(payload);
+                    } catch (e) {
+                      console.error(e);
+                    }
+                  })();
+                }}
+              >
                 <ClipboardList size={16} className="mr-2" /> Download PDF
               </Button>
-              <Button variant="outline" className="rounded-2xl border-slate-300">
+              <Button
+                variant="outline"
+                className="rounded-2xl border-slate-300"
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await logReportExport("generate");
+                    } catch (e) {
+                      console.error(e);
+                    }
+                  })();
+                }}
+              >
                 <Upload size={16} className="mr-2" /> Generate Report
               </Button>
             </div>
@@ -2752,14 +4083,38 @@ function Reports({ members }) {
             <div className="mt-5 rounded-3xl bg-slate-50 p-5">
               <h4 className="font-black">Send Report</h4>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <Button className="rounded-2xl bg-emerald-600 hover:bg-emerald-700">
+                <Button
+                  className="rounded-2xl bg-emerald-600 hover:bg-emerald-700"
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        await logReportSend("whatsapp");
+                      } catch (e) {
+                        console.error(e);
+                      }
+                    })();
+                  }}
+                >
                   Send via WhatsApp
                 </Button>
-                <Button className="rounded-2xl bg-blue-600 hover:bg-blue-700">Send via Email</Button>
+                <Button
+                  className="rounded-2xl bg-blue-600 hover:bg-blue-700"
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        await logReportSend("email");
+                      } catch (e) {
+                        console.error(e);
+                      }
+                    })();
+                  }}
+                >
+                  Send via Email
+                </Button>
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <Input placeholder="Client email address" />
-                <Input placeholder="Client WhatsApp number" />
+                <Input ref={emailRef} placeholder="Client email address" />
+                <Input ref={whatsappRef} placeholder="Client WhatsApp number" />
               </div>
             </div>
           </CardContent>
@@ -2785,7 +4140,7 @@ function Reports({ members }) {
   );
 }
 
-function Admin({ members }) {
+function Admin({ members, session }) {
   return (
     <div>
       <SectionTitle
@@ -2814,7 +4169,24 @@ function Admin({ members }) {
                 <p className="font-black">{m.name}</p>
                 <p className="text-sm text-slate-500">Status: {m.status}</p>
                 <p className="text-sm text-slate-500">Renewal: {m.renewal}</p>
-                <SaveButton className="bg-slate-950">Update Billing</SaveButton>
+                <SaveButton
+                  className="bg-slate-950"
+                  onSave={async () => {
+                    if (!supabase || !session?.user?.id) return;
+                    const { error } = await supabase.from("billing_updates").insert({
+                      member_id: m.id,
+                      payload: {
+                        status: m.status,
+                        renewal: m.renewal,
+                        action: "update_billing",
+                        at: new Date().toISOString(),
+                      },
+                    });
+                    if (error) throw error;
+                  }}
+                >
+                  Update Billing
+                </SaveButton>
               </div>
             ))}
           </div>
