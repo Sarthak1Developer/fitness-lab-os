@@ -3,7 +3,11 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig({
+export default defineConfig(() => {
+  const base = process.env.VITE_BASE || '/'
+
+  return {
+    base,
   plugins: [
     react(),
     tailwindcss(),
@@ -19,8 +23,8 @@ export default defineConfig({
         background_color: '#0f172a',
         display: 'standalone',
         orientation: 'portrait',
-        scope: '/',
-        start_url: '/',
+        scope: base,
+        start_url: base,
 
         icons: [
           {
@@ -54,4 +58,5 @@ export default defineConfig({
       }
     })
   ],
+  }
 })

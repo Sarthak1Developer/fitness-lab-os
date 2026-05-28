@@ -35,6 +35,19 @@ npm run build
 npm run preview
 ```
 
+## Deploy (GitHub Pages)
+
+This repo includes a GitHub Actions workflow that builds and deploys the app to GitHub Pages on every push to `main`.
+
+1) In GitHub repo settings → **Pages**:
+- Source: **GitHub Actions**
+
+2) Add repository secrets (Settings → Secrets and variables → Actions):
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+These are the same values you use locally in `.env.local`. They are required because this is a static Vite build.
+
 ## License
 
 MIT — see the LICENSE file.
